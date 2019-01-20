@@ -1,0 +1,9 @@
+# ignore an entire directory
+
+/out
+/.idea
+/.project
+
+# ignore a file type
+
+*.class
