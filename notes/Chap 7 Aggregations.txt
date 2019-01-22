@@ -1,0 +1,259 @@
+Chapter 7. Aggregations
+#############################################
+
+=============================================
+Aggregation Functions
+=============================================
+
+---------------------------------------------
+1.count
+---------------------------------------------
+The first function worth going over is count, except in this example it will perform as a
+transformation instead of an action. In this case, we can do one of two things: specify a specific
+column to count, or all the columns by using count(*) or count(1) to represent that we want to
+count every row as the literal one, as shown in this example:
+// in Scala
+import org.apache.spark.sql.functions.count
+df.select(count("StockCode")).show() // 541909
+
+WARNING
+There are a number of gotchas when it comes to null values and counting. For instance, when
+performing a count(*), Spark will count null values (including rows containing all nulls). However,
+when counting an individual column, Spark will not count the null values.
+
+---------------------------------------------
+2.countDistinct
+---------------------------------------------
+Sometimes, the total number is not relevant; rather, it’s the number of unique groups that you
+want. To get this number, you can use the countDistinct function. This is a bit more relevant
+for individual columns:
+// in Scala
+import org.apache.spark.sql.functions.countDistinct
+df.select(countDistinct("StockCode")).show() // 4070
+
+---------------------------------------------
+3.approx_count_distinct
+---------------------------------------------
+Often, we find ourselves working with large datasets and the exact distinct count is irrelevant.
+There are times when an approximation to a certain degree of accuracy will work just fine, and
+for that, you can use the approx_count_distinct function:
+// in Scala
+import org.apache.spark.sql.functions.approx_count_distinct
+df.select(approx_count_distinct("StockCode", 0.1)).show() // 3364
+
+You will notice that approx_count_distinct took another parameter with which you can
+specify the maximum estimation error allowed. In this case, we specified a rather large error and
+thus receive an answer that is quite far off but does complete more quickly than countDistinct.
+You will see much greater performance gains with larger datasets.
+
+---------------------------------------------
+4.first and last
+---------------------------------------------
+You can get the first and last values from a DataFrame by using these two obviously named
+functions. This will be based on the rows in the DataFrame, not on the values in the DataFrame:
+// in Scala
+import org.apache.spark.sql.functions.{first, last}
+df.select(first("StockCode"), last("StockCode")).show()
+
+---------------------------------------------
+5.min and max
+---------------------------------------------
+To extract the minimum and maximum values from a DataFrame, use the min and max functions:
+// in Scala
+import org.apache.spark.sql.functions.{min, max}
+df.select(min("Quantity"), max("Quantity")).show()
+
+---------------------------------------------
+6.sum
+---------------------------------------------
+Another simple task is to add all the values in a row using the sum function:
+// in Scala
+import org.apache.spark.sql.functions.sum
+df.select(sum("Quantity")).show() // 5176450
+
+---------------------------------------------
+7.sumDistinct
+---------------------------------------------
+In addition to summing a total, you also can sum a distinct set of values by using the
+sumDistinct function:
+// in Scala
+import org.apache.spark.sql.functions.sumDistinct
+df.select(sumDistinct("Quantity")).show() // 29310
+
+---------------------------------------------
+8.avg
+---------------------------------------------
+Although you can calculate average by dividing sum by count, Spark provides an easier way to
+get that value via the avg or mean functions. In this example, we use alias in order to more
+easily reuse these columns later:
+
+// in Scala
+import org.apache.spark.sql.functions.{sum, count, avg, expr}
+df.select(
+count("Quantity").alias("total_transactions"),
+sum("Quantity").alias("total_purchases"),
+avg("Quantity").alias("avg_purchases"),
+expr("mean(Quantity)").alias("mean_purchases"))
+.selectExpr(
+"total_purchases/total_transactions",
+"avg_purchases",
+"mean_purchases").show()
+
+---------------------------------------------
+9.Variance and Standard Deviation
+---------------------------------------------
+The variance is the average of the squared differences from the mean,
+and the standard deviation is the square root of the variance.
+
+---------------------------------------------
+10.skewness and kurtosis
+---------------------------------------------
+Skewness and kurtosis are both measurements of extreme points in your data. Skewness
+measures the asymmetry of the values in your data around the mean, whereas kurtosis is a
+measure of the tail of data. These are both relevant specifically when modeling your data as a
+probability distribution of a random variable.
+
+---------------------------------------------
+11.Covariance and Correlation
+---------------------------------------------
+We discussed single column aggregations, but some functions compare the interactions of the
+values in two difference columns together. Two of these functions are cov and corr, for
+covariance and correlation, respectively. Correlation measures the Pearson correlation
+coefficient, which is scaled between –1 and +1. The covariance is scaled according to the inputs
+in the data.
+
+// in Scala
+import org.apache.spark.sql.functions.{corr, covar_pop, covar_samp}
+df.select(corr("InvoiceNo", "Quantity"), covar_samp("InvoiceNo", "Quantity"),
+covar_pop("InvoiceNo", "Quantity")).show()
+
+---------------------------------------------
+12.Aggregating to Complex Types
+---------------------------------------------
+In Spark, you can perform aggregations not just of numerical values using formulas, you can also
+perform them on complex types. For example, we can collect a list of values present in a given
+column or only the unique values by collecting to a set.
+
+// in Scala
+import org.apache.spark.sql.functions.{collect_set, collect_list}
+df.agg(collect_set("Country"), collect_list("Country")).show()
+
+=============================================
+Grouping
+=============================================
+Thus far, we have performed only DataFrame-level aggregations. A more common task is to
+perform calculations based on groups in the data.
+
+We will group by each unique invoice number and get the count of items
+on that invoice. Note that this returns another DataFrame and is lazily performed.
+
+We do this grouping in two phases. First we specify the column(s) on which we would like to
+group, and then we specify the aggregation(s). The first step returns a
+RelationalGroupedDataset, and the second step returns a DataFrame.
+As mentioned, we can specify any number of columns on which we want to group:
+
+df.groupBy("InvoiceNo", "CustomerId").count().show()
+-- in SQL
+SELECT count(*) FROM dfTable GROUP BY InvoiceNo, CustomerId
+
+---------------------------------------------
+1.Grouping with Expressions
+---------------------------------------------
+// in Scala
+import org.apache.spark.sql.functions.count
+df.groupBy("InvoiceNo").agg(
+count("Quantity").alias("quan"),
+expr("count(Quantity)")).show()
+
+---------------------------------------------
+2.Grouping with Maps
+---------------------------------------------
+Sometimes, it can be easier to specify your transformations as a series of Maps for which the key
+is the column, and the value is the aggregation function (as a string) that you would like to
+perform. You can reuse multiple column names if you specify them inline, as well:
+
+// in Scala
+df.groupBy("InvoiceNo").agg("Quantity"->"avg", "Quantity"->"stddev_pop").show()
+
+-- in SQL
+SELECT avg(Quantity), stddev_pop(Quantity), InvoiceNo FROM dfTable
+GROUP BY InvoiceNo
+
+=============================================
+Window Functions
+=============================================
+You can also use window functions to carry out some unique aggregations by either computing
+some aggregation on a specific “window” of data, which you define by using a reference to the
+current data.
+
+Spark supports three kinds of window functions: ranking functions, analytic functions,
+and aggregate functions.
+
+=============================================
+Grouping Sets
+=============================================
+ometimes we want something a bit
+more complete—an aggregation across multiple groups. We achieve this by using grouping sets.
+
+WARNING
+Grouping sets depend on null values for aggregation levels. If you do not filter-out null values, you
+will get incorrect results. This applies to cubes, rollups, and grouping sets.
+
+-- in SQL
+SELECT CustomerId, stockCode, sum(Quantity) FROM dfNoNull
+GROUP BY customerId, stockCode GROUPING SETS((customerId, stockCode),())
+ORDER BY CustomerId DESC, stockCode DESC
+
+The GROUPING SETS operator is only available in SQL. To perform the same in DataFrames, you
+use the rollup and cube operators—which allow us to get the same results.
+
+---------------------------------------------
+1.Rollups
+---------------------------------------------
+rollup is a multidimensional aggregation that performs a variety of group-by style calculations
+for us.
+
+Let’s create a rollup that looks across time (with our new Date column) and space (with the
+Country column) and creates a new DataFrame that includes the grand total over all dates, the
+grand total for each date in the DataFrame, and the subtotal for each country on each date in the
+DataFrame:
+val rolledUpDF = dfNoNull.rollup("Date", "Country").agg(sum("Quantity"))
+.selectExpr("Date", "Country", "`sum(Quantity)` as total_quantity")
+.orderBy("Date")rolledUpDF.show()
+
+Now where you see the null values is where you’ll find the grand totals. A null in both rollup
+columns specifies the grand total across both of those columns:
+
+---------------------------------------------
+2.Cube
+---------------------------------------------
+A cube takes the rollup to a level deeper. Rather than treating elements hierarchically, a cube
+does the same thing across all dimensions. This means that it won’t just go by date over the
+entire time period, but also the country. To pose this as a question again, can you make a table
+that includes the following?
+The total across all dates and countries
+The total for each date across all countries
+The total for each country on each date
+The total for each country across all dates
+
+// in Scala
+dfNoNull.cube("Date", "Country").agg(sum(col("Quantity")))
+.select("Date", "Country", "sum(Quantity)").orderBy("Date").show()
+
+---------------------------------------------
+3.Grouping Metadata
+---------------------------------------------
+
+---------------------------------------------
+4.Pivot
+---------------------------------------------
+Pivots make it possible for you to convert a row into a column.
+
+// in Scala
+val pivoted = dfWithDate.groupBy("date").pivot("Country").sum()
+
+
+=============================================
+UD Aggregation Functions
+=============================================
+
