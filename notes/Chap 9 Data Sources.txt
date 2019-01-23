@@ -1,0 +1,502 @@
+Chapter 9. Data Sources
+-----------------------------------
+Spark has six “core” data sources and hundreds of external data sources written by the community:
+
+CSV
+JSON
+Parquet
+ORC
+JDBC/ODBC connections
+Plain-text files
+
+Spark has numerous community-created data sources. Here’s just a small sample:
+Cassandra
+HBase
+MongoDB
+AWS Redshift
+XML
+And many, many others
+
+=============================================
+The Structure of the Data Sources API
+=============================================
+
+---------------------------------------------
+Read API Structure
+---------------------------------------------
+The core structure for reading data is as follows:
+DataFrameReader.format(...).option("key", "value").schema(...).load()
+
+format is optional because by
+default Spark will use the Parquet format. option allows you to set key-value configurations to
+parameterize how you will read data. Lastly, schema is optional if the data source provides a
+schema or if you intend to use schema inference. Naturally, there are some required options for
+each format
+
+---------------------------------------------
+Basics of Reading Data
+---------------------------------------------
+The foundation for reading data in Spark is the DataFrameReader. We access this through the
+SparkSession via the read attribute:
+spark.read
+
+After we have a DataFrame reader, we specify several values:
+The format
+The schema
+The read mode
+A series of options
+
+The format, options, and schema each return a DataFrameReader
+
+spark.read.format("csv")
+.option("mode", "FAILFAST")
+.option("inferSchema", "true")
+.option("path", "path/to/file(s)")
+.schema(someSchema)
+.load()
+
+---------------------------------------------
+Read modes
+---------------------------------------------
+
+- permissive: Sets all fields to null when it encounters a corrupted record and places all corrupted records
+in a string column called _corrupt_record
+
+- dropMalformed :Drops the row that contains malformed records
+
+- failFast: Fails immediately upon encountering malformed records
+
+The default is permissive.
+
+---------------------------------------------
+Write API Structure
+---------------------------------------------
+The core structure for writing data is as follows:
+
+DataFrameWriter.format(...).option(...).partitionBy(...).bucketBy(...).sortBy(...).save()
+
+Format is optional because by default, Spark will use the Parquet format.
+option, again, allows us to configure how to write out our given data.
+
+PartitionBy, bucketBy, and sortBy work only for file-based data sources; you can
+use them to control the specific layout of files at the destination.
+
+---------------------------------------------
+Basics of Writing Data
+---------------------------------------------
+Instead of the DataFrameReader, we have the DataFrameWriter.
+Because we always need to write out some given data source,
+we access the DataFrameWriter on a per-DataFrame basis via the write attribute:
+
+// in Scala
+dataFrame.write
+
+After we have a DataFrameWriter, we specify three values: the format, a series of options,
+and the save mode. At a minimum, you must supply a path.
+We will cover the potential for options, which vary from data source to data source, shortly.
+// in Scala
+dataframe.write.format("csv")
+.option("mode", "OVERWRITE")
+.option("dateFormat", "yyyy-MM-dd")
+.option("path", "path/to/file(s)")
+.save()
+
+---------------------------------------------
+Save modes
+---------------------------------------------
+Save mode Description
+- append: Appends the output files to the list of files that already exist at that location
+- overwrite: Will completely overwrite any data that already exists there
+- errorIfExists: Throws an error and fails the write if data or files already exist at the specified location
+- ignore: If data or files exist at the location, do nothing with the current DataFrame
+
+The default is errorIfExists. This means that if Spark finds data at the location to which
+you’re writing, it will fail the write immediately.
+
+=============================================
+1. CSV Files
+=============================================
+CSV files, while seeming well structured, are actually one of the trickiest file formats
+
+For this reason, the CSV reader has a large number of options. These options give
+you the ability to work around issues like certain characters needing to be escaped—for example,
+commas inside of columns when the file is also comma-delimited or null values labeled in an
+unconventional way.
+
+---------------------------------------------
+CSV Options
+---------------------------------------------
+Both sep Any single string ,
+character The single character that is
+used as separator for each field and value.
+
+Both header true , false false A Boolean flag that
+declares whether the first line in the file(s) are the
+names of the columns.
+
+Read escape Any string
+character \ The character Spark should
+use to escape other
+characters in the file.
+
+Read inferSchema true , false false Specifies whether Spark
+should infer column types
+when reading the file.
+
+---------------------------------------------
+Reading CSV Files
+---------------------------------------------
+To read a CSV file, like any other format, we must first create a DataFrameReader for that
+specific format. Here, we specify the format to be CSV:
+
+spark.read.format("csv")
+
+spark.read.format("csv")
+.option("header", "true")
+.option("mode", "FAILFAST")
+.schema(myManualSchema)
+.load("/data/flight-data/csv/2010-summary.csv")
+.take(5)
+
+In general, Spark will fail only at job execution time rather than DataFrame definition time—
+even if, for example, we point to a file that does not exist. This is due to lazy evaluation, a
+concept we learned about in Chapter 2.
+
+---------------------------------------------
+Writing CSV Files
+---------------------------------------------
+Just as with reading data, there are a variety of options (listed in Table 9-3) for writing data when
+we write CSV files. This is a subset of the reading options because many do not apply when
+writing data (like maxColumns and inferSchema)
+
+For instance, we can take our CSV file and write it out as a TSV file quite easily:
+// in Scala
+csvFile.write.format("csv").mode("overwrite").option("sep", "\t")
+.save("/tmp/my-tsv-file.tsv")
+
+=============================================
+2. JSON Files
+=============================================
+In Spark, when we refer to JSON files, we refer to line-delimited JSON files.
+This contrasts with files that have a large JSON object or array per file.
+
+The line-delimited versus multiline trade-off is controlled by a single option: multiLine. When
+you set this option to true, you can read an entire file as one json object and Spark will go
+through the work of parsing that into a DataFrame.
+
+---------------------------------------------
+JSON Options
+---------------------------------------------
+ex: for both read and write options:
+compression or codec
+dateFormat
+timestampFormat
+
+---------------------------------------------
+Reading JSON Files
+---------------------------------------------
+// in Scala
+spark.read.format("json").option("mode", "FAILFAST").schema(myManualSchema)
+.load("/data/flight-data/json/2010-summary.json").show(5)
+
+---------------------------------------------
+Writing JSON Files
+---------------------------------------------
+Writing JSON files is just as simple as reading them, and, as you might expect, the data source
+does not matter. Therefore, we can reuse the CSV DataFrame that we created earlier to be the
+source for our JSON file. This, too, follows the rules that we specified before: one file per
+partition will be written out, and the entire DataFrame will be written out as a folder. It will also
+have one JSON object per line:
+// in Scala
+csvFile.write.format("json").mode("overwrite").save("/tmp/my-json-file.json")
+
+=============================================
+3. Parquet Files
+=============================================
+Parquet is an open source column-oriented data store that provides a variety of storage
+optimizations, especially for analytics workloads. It provides columnar compression, which
+saves storage space and allows for reading individual columns instead of entire files. It is a file
+format that works exceptionally well with Apache Spark and is in fact the default file format.
+
+Another advantage of Parquet is that it supports complex types.
+This means that if your column is an array (which would fail with a
+CSV file, for example), map, or struct, you’ll still be able to read and write that file without
+issue. Here’s how to specify Parquet as the read format:
+
+spark.read.format("parquet")
+
+---------------------------------------------
+Reading Parquet Files
+---------------------------------------------
+Parquet has very few options because it enforces its own schema when storing data. Thus, all you
+need to set is the format and you are good to go. We can set the schema if we have strict
+requirements for what our DataFrame should look like. Oftentimes this is not necessary because
+we can use schema on read, which is similar to the inferSchema with CSV files. However, with
+Parquet files, this method is more powerful because the schema is built into the file itself (so no
+inference needed).
+Here are some simple examples reading from parquet:
+spark.read.format("parquet")
+// in Scala
+spark.read.format("parquet")
+.load("/data/flight-data/parquet/2010-summary.parquet").show(5)
+
+---------------------------------------------
+Parquet options
+---------------------------------------------
+As we just mentioned, there are very few Parquet options—precisely two, in fact—because it has
+a well-defined specification that aligns closely with the concepts in Spark.
+
+WARNING
+Even though there are only two options, you can still encounter problems if you’re working with
+incompatible Parquet files. Be careful when you write out Parquet files with different versions of
+Spark (especially older ones) because this can cause significant headache.
+
+Write compression or codec
+Read mergeSchema
+
+---------------------------------------------
+Writing Parquet Files
+---------------------------------------------
+Writing Parquet is as easy as reading it. We simply specify the location for the file. The same
+partitioning rules apply:
+
+// in Scala
+csvFile.write.format("parquet").mode("overwrite")
+.save("/tmp/my-parquet-file.parquet")
+
+=============================================
+4. ORC Files
+=============================================
+ORC is a self-describing, type-aware columnar file format designed for Hadoop workloads. It is
+optimized for large streaming reads, but with integrated support for finding required rows
+quickly. ORC actually has no options for reading in data because Spark understands the file
+format quite well. An often-asked question is: What is the difference between ORC and Parquet?
+For the most part, they’re quite similar; the fundamental difference is that Parquet is further
+optimized for use with Spark, whereas ORC is further optimized for Hive.
+
+---------------------------------------------
+Reading Orc Files
+---------------------------------------------
+Here’s how to read an ORC file into Spark:
+// in Scala
+spark.read.format("orc").load("/data/flight-data/orc/2010-summary.orc").show(5)
+
+---------------------------------------------
+Writing Orc Files
+---------------------------------------------
+// in Scala
+csvFile.write.format("orc").mode("overwrite").save("/tmp/my-json-file.orc")
+
+=============================================
+5. SQL Databases
+=============================================
+To read and write from these databases, you need to do two things: include the Java Database
+Connectivity (JDBC) driver for you particular database on the spark classpath, and provide the
+proper JAR for the driver itself:
+
+./bin/spark-shell --driver-class-path postgresql-9.4.1207.jar --jars postgresql-9.4.1207.jar
+
+---------------------------------------------
+JDBC data source options
+---------------------------------------------
+url, dbtable, driver, partitionCOlumn, lowerBound, upperBound
+numPartitions, fetchSize, batchSize, isolationLevel, truncate
+createTableOptions, createTableColumnTypes
+
+---------------------------------------------
+Reading from SQL Databases
+---------------------------------------------
+// in Scala
+val driver = "org.sqlite.JDBC"
+val path = "/data/flight-data/jdbc/my-sqlite.db"
+val url = s"jdbc:sqlite:/${path}"
+val tablename = "flight_info"
+
+After you have defined the connection properties, you can test your connection to the database
+itself to ensure that it is functional.
+
+import java.sql.DriverManager
+val connection = DriverManager.getConnection(url)
+connection.isClosed()
+connection.close()
+
+If this connection succeeds, you’re good to go. Let’s go ahead and read the DataFrame from the
+SQL table:
+// in Scala
+val pgDF = spark.read
+.format("jdbc")
+.option("driver", "org.postgresql.Driver")
+.option("url", "jdbc:postgresql://database_server")
+.option("dbtable", "schema.tablename")
+.option("user", "username").option("password","my-secret-password").load()
+
+You’ll also notice that there is already a schema, as well. That’s because
+Spark gathers this information from the table itself and maps the types to Spark data types. Let’s
+get only the distinct locations to verify that we can query it as expected:
+
+dbDataFrame.select("DEST_COUNTRY_NAME").distinct().show(5)
+
+---------------------------------------------
+Query Pushdown
+---------------------------------------------
+First, Spark makes a best-effort attempt to filter data in the database itself before creating the
+DataFrame.
+
+---------------------------------------------
+Reading from databases in parallel
+---------------------------------------------
+Spark has an underlying algorithm that can read multiple files into one partition, or
+conversely, read multiple partitions out of one file, depending on the file size and the
+“splitability” of the file type and compression. The same flexibility that exists with files, also
+exists with SQL databases except that you must configure it a bit more manually.
+
+// in Scala
+val dbDataFrame = spark.read.format("jdbc")
+.option("url", url).option("dbtable", tablename).option("driver", driver)
+.option("numPartitions", 10).load()
+
+We only need data
+from two countries in our data: Anguilla and Sweden. We could filter these down and have them
+pushed into the database, but we can also go further by having them arrive in their own partitions
+in Spark. We do that by specifying a list of predicates when we create the data source:
+// in Scala
+val props = new java.util.Properties
+props.setProperty("driver", "org.sqlite.JDBC")
+val predicates = Array(
+"DEST_COUNTRY_NAME = 'Sweden' OR ORIGIN_COUNTRY_NAME = 'Sweden'",
+"DEST_COUNTRY_NAME = 'Anguilla' OR ORIGIN_COUNTRY_NAME = 'Anguilla'")
+spark.read.jdbc(url, tablename, predicates, props).show()
+spark.read.jdbc(url, tablename, predicates, props).rdd.getNumPartitions // 2
+
+---------------------------------------------
+Writing to SQL Databases
+---------------------------------------------
+Writing out to SQL databases is just as easy as before. You simply specify the URI and write out
+the data according to the specified write mode that you want.
+
+// in Scala
+val newPath = "jdbc:sqlite://tmp/my-sqlite.db"
+csvFile.write.mode("overwrite").jdbc(newPath, tablename, props)
+
+=============================================
+Text Files
+=============================================
+Spark also allows you to read in plain-text files. Each line in the file becomes a record in the
+DataFrame. It is then up to you to transform it accordingly.
+
+---------------------------------------------
+Reading Text Files
+---------------------------------------------
+Reading text files is straightforward: you simply specify the type to be textFile. With
+textFile, partitioned directory names are ignored. To read and write text files according to
+partitions, you should use text, which respects partitioning on reading and writing:
+
+spark.read.textFile("/data/flight-data/csv/2010-summary.csv")
+.selectExpr("split(value, ',') as rows").show()
+
+---------------------------------------------
+Writing Text Files
+---------------------------------------------
+When you write a text file, you need to be sure to have only one string column; otherwise, the
+write will fail:
+
+csvFile.select("DEST_COUNTRY_NAME").write.text("/tmp/simple-text-file.txt")
+
+If you perform some partitioning when performing your write (we’ll discuss partitioning in the
+next couple of pages), you can write more columns. However, those columns will manifest as
+directories in the folder to which you’re writing out to, instead of columns on every single file:
+// in Scala
+csvFile.limit(10).select("DEST_COUNTRY_NAME", "count")
+.write.partitionBy("count").text("/tmp/five-csv-files2.csv")
+
+=============================================
+Advanced I/O Concepts
+=============================================
+We saw previously that we can control the parallelism of files that we write by controlling the
+partitions prior to writing. We can also control specific data layout by controlling two things:
+bucketing and partitioning
+
+---------------------------------------------
+Splittable File Types and Compression
+---------------------------------------------
+Certain file formats are fundamentally “splittable.” This can improve speed because it makes it
+possible for Spark to avoid reading an entire file, and access only the parts of the file necessary
+to satisfy your query. Additionally if you’re using something like Hadoop Distributed File
+System (HDFS), splitting a file can provide further optimization if that file spans multiple
+blocks. In conjunction with this is a need to manage compression. Not all compression schemes
+are splittable. How you store your data is of immense consequence when it comes to making
+your Spark jobs run smoothly. We recommend Parquet with gzip compression.
+
+---------------------------------------------
+Reading Data in Parallel
+---------------------------------------------
+Multiple executors cannot read from the same file at the same time necessarily, but they can read
+different files at the same time. In general, this means that when you read from a folder with
+multiple files in it, each one of those files will become a partition in your DataFrame and be read
+in by available executors in parallel
+
+---------------------------------------------
+Writing Data in Parallel
+---------------------------------------------
+The number of files or data written is dependent on the number of partitions the DataFrame has
+at the time you write out the data. By default, one file is written per partition of the data.
+
+Partitioning
+------------
+Partitioning is a tool that allows you to control what data is stored (and where) as you write it.
+When you write a file to a partitioned directory (or table), you basically encode a column as a
+folder. What this allows you to do is skip lots of data when you go to read it in later, allowing
+you to read in only the data relevant to your problem instead of having to scan the complete
+dataset. These are supported for all file-based data sources:
+
+// in Scala
+csvFile.limit(10).write.mode("overwrite").partitionBy("DEST_COUNTRY_NAME")
+.save("/tmp/partitioned-files.parquet")
+
+Bucketing
+----------
+Bucketing is another file organization approach with which you can control the data that is
+specifically written to each file. This can help avoid shuffles later when you go to read the data
+because data with the same bucket ID will all be grouped together into one physical partition.
+This means that the data is prepartitioned according to how you expect to use that data later on,
+meaning you can avoid expensive shuffles when joining or aggregating.
+
+Rather than partitioning on a specific column (which might write out a ton of directories), it’s
+probably worthwhile to explore bucketing the data instead. This will create a certain number of
+files and organize our data into those “buckets”:
+
+val numberBuckets = 10
+val columnToBucketBy = "count"
+csvFile.write.format("parquet").mode("overwrite")
+.bucketBy(numberBuckets, columnToBucketBy).saveAsTable("bucketedFiles")
+
+Bucketing is supported only for Spark-managed tables.
+
+---------------------------------------------
+Writing Complex Types
+---------------------------------------------
+As we covered in Chapter 6, Spark has a variety of different internal types. Although Spark can
+work with all of these types, not every single type works well with every data file format.
+For instance, CSV files do not support complex types, whereas Parquet and ORC do.
+
+---------------------------------------------
+Managing File Size
+---------------------------------------------
+Managing file sizes is an important factor not so much for writing data but reading it later on.
+When you’re writing lots of small files, there’s a significant metadata overhead that you incur
+managing all of those files. Spark especially does not do well with small files, although many file
+systems (like HDFS) don’t handle lots of small files well, either.
+
+The opposite is also true: you don’t want files that are too large
+either, because it becomes inefficient to have to read entire blocks of data when you need only a
+few rows.
+
+Spark 2.2 introduced a new method for controlling file sizes in a more automatic way. We saw
+previously that the number of output files is a derivative of the number of partitions we had at
+write time (and the partitioning columns we selected)
+
+You can use the
+maxRecordsPerFile option and specify a number of your choosing. This allows you to better
+control file sizes by controlling the number of records that are written to each file. For example,
+if you set an option for a writer as df.write.option("maxRecordsPerFile", 5000), Spark
+will ensure that files will contain at most 5,000 records.

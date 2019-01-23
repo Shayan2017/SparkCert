@@ -1,0 +1,455 @@
+Chapter 10. Spark SQL
+---------------------------------------------
+In a nutshell, with Spark SQL you can run SQL queries against views or tables organized into
+databases. You also can use system functions or define user functions and analyze query plans in
+order to optimize their workloads. This integrates directly into the DataFrame and Dataset API,
+and as we saw in previous chapters, you can choose to express some of your data manipulations
+in SQL and others in DataFrames and they will compile to the same underlying code.
+
+=============================================
+How to Run Spark SQL Queries
+=============================================
+
+---------------------------------------------
+Spark SQL CLI
+---------------------------------------------
+The Spark SQL CLI is a convenient tool with which you can make basic Spark SQL queries in
+local mode from the command line. Note that the Spark SQL CLI cannot communicate with the
+Thrift JDBC server. To start the Spark SQL CLI, run the following in the Spark directory:
+./bin/spark-sql
+
+---------------------------------------------
+Spark’s Programmatic SQL Interface
+---------------------------------------------
+spark.sql("SELECT 1 + 1").show()
+
+The command spark.sql("SELECT 1 + 1") returns a DataFrame that we can then evaluate
+programmatically. Just like other transformations, this will not be executed eagerly but lazily.
+This is an immensely powerful interface because there are some transformations that are much
+simpler to express in SQL code than in DataFrames.
+
+You can express multiline queries quite simply by passing a multiline string into the function.
+For example, you could execute something like the following code in Python or Scala:
+spark.sql("""SELECT user_id, department, first_name FROM professors
+WHERE department IN
+(SELECT name FROM department WHERE created_date >= '2016-01-01')""")
+
+---------------------------------------------
+SparkSQL Thrift JDBC/ODBC Server
+---------------------------------------------
+Spark provides a Java Database Connectivity (JDBC) interface by which either you or a remote
+program connects to the Spark driver in order to execute Spark SQL queries. A common use case
+might be a for a business analyst to connect business intelligence software like Tableau to Spark.
+
+To start the JDBC/ODBC server, run the following in the Spark directory:
+./sbin/start-thriftserver.sh
+
+=============================================
+Catalog
+=============================================
+The highest level abstraction in Spark SQL is the Catalog. The Catalog is an abstraction for the
+storage of metadata about the data stored in your tables as well as other helpful things like
+databases, tables, functions, and views. The catalog is available in the
+org.apache.spark.sql.catalog.Catalog package and contains a number of helpful functions
+for doing things like listing tables, databases, and functions.
+
+=============================================
+Tables
+=============================================
+To do anything useful with Spark SQL, you first need to define tables. Tables are logically
+equivalent to a DataFrame in that they are a structure of data against which you run commands.
+
+An important thing to note is that in Spark 2.X, tables always contain data. There is no notion of
+a temporary table, only a view, which does not contain data. This is important because if you go
+to drop a table, you can risk losing the data when doing so.
+
+---------------------------------------------
+Spark-Managed Tables
+---------------------------------------------
+One important note is the concept of managed versus unmanaged tables.
+
+When you define a table from files on disk, you are defining an unmanaged table. When
+you use saveAsTable on a DataFrame, you are creating a managed table for which Spark will
+track of all of the relevant information.
+
+---------------------------------------------
+Creating Tables
+---------------------------------------------
+You can create tables from a variety of sources. Something fairly unique to Spark is the
+capability of reusing the entire Data Source API within SQL.
+
+CREATE TABLE flights (
+DEST_COUNTRY_NAME STRING, ORIGIN_COUNTRY_NAME STRING, count LONG)
+USING JSON OPTIONS (path '/data/flight-data/json/2015-summary.json')
+
+USING AND STORED AS
+-------------------
+The specification of the USING syntax in the previous example is of significant importance. If
+you do not specify the format, Spark will default to a Hive SerDe configuration. This has
+performance implications for future readers and writers because Hive SerDes are much
+slower than Spark’s native serialization. Hive users can also use the STORED AS syntax to
+specify that this should be a Hive table.
+
+It is possible to create a table from a query as well:
+CREATE TABLE flights_from_select USING parquet AS SELECT * FROM flights
+
+In addition, you can specify to create a table only if it does not currently exist:
+NOTE
+In this example, we are creating a Hive-compatible table because we did not explicitly specify the
+format via USING. We can also do the following:
+CREATE TABLE IF NOT EXISTS flights_from_select
+AS SELECT * FROM flights
+
+Finally, you can control the layout of the data by writing out a partitioned dataset, as we saw in
+Chapter 9:
+CREATE TABLE partitioned_flights USING parquet PARTITIONED BY (DEST_COUNTRY_NAME)
+AS SELECT DEST_COUNTRY_NAME, ORIGIN_COUNTRY_NAME, count FROM flights LIMIT 5
+These tables will be available in Spark even through sessions; temporary tables do not currently
+exist in Spark. You must create a temporary view
+
+---------------------------------------------
+Creating External Tables
+---------------------------------------------
+You can view any files that have already been defined by running the following command:
+CREATE EXTERNAL TABLE hive_flights (
+DEST_COUNTRY_NAME STRING, ORIGIN_COUNTRY_NAME STRING, count LONG)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LOCATION '/data/flight-data-hive/'
+
+You can also create an external table from a select clause:
+CREATE EXTERNAL TABLE hive_flights_2
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+LOCATION '/data/flight-data-hive/' AS SELECT * FROM flights
+
+---------------------------------------------
+Inserting into Tables
+---------------------------------------------
+Insertions follow the standard SQL syntax:
+
+INSERT INTO flights_from_select
+SELECT DEST_COUNTRY_NAME, ORIGIN_COUNTRY_NAME, count FROM flights LIMIT 20
+
+You can optionally provide a partition specification if you want to write only into a certain
+partition. Note that a write will respect a partitioning scheme, as well (which may cause the
+above query to run quite slowly); however, it will add additional files only into the end
+partitions:
+
+INSERT INTO partitioned_flights
+PARTITION (DEST_COUNTRY_NAME="UNITED STATES")
+SELECT count, ORIGIN_COUNTRY_NAME FROM flights
+WHERE DEST_COUNTRY_NAME='UNITED STATES' LIMIT 12
+
+---------------------------------------------
+Describing Table Metadata
+---------------------------------------------
+We saw earlier that you can add a comment when creating a table. You can view this by
+describing the table metadata, which will show us the relevant comment:
+
+DESCRIBE TABLE flights_csv
+
+You can also see the partitioning scheme for the data by using the following (note, however, that
+this works only on partitioned tables):
+
+SHOW PARTITIONS partitioned_flights
+
+---------------------------------------------
+Refreshing Table Metadata
+---------------------------------------------
+Maintaining table metadata is an important task to ensure that you’re reading from the most
+recent set of data. There are two commands to refresh table metadata. REFRESH TABLE refreshes
+all cached entries (essentially, files) associated with the table. If the table were previously
+cached, it would be cached lazily the next time it is scanned:
+REFRESH table partitioned_flights
+
+Another related command is REPAIR TABLE, which refreshes the partitions maintained in the
+catalog for that given table. This command’s focus is on collecting new partition information—
+an example might be writing out a new partition manually and the need to repair the table
+accordingly:
+MSCK REPAIR TABLE partitioned_flights
+
+---------------------------------------------
+Dropping Tables
+---------------------------------------------
+DROP TABLE flights_csv;
+
+WARNING
+Dropping a table deletes the data in the table, so you need to be very careful when doing this.
+
+DROP TABLE IF EXISTS flights_csv;
+
+Dropping unmanaged tables
+-------------------------
+If you are dropping an unmanaged table (e.g., hive_flights), no data will be removed but you
+will no longer be able to refer to this data by the table name.
+
+---------------------------------------------
+Caching Tables
+---------------------------------------------
+CACHE TABLE flights
+
+Here’s how you uncache them:
+
+UNCACHE TABLE FLIGHT
+
+=============================================
+Views
+=============================================
+Now that you created a table, another thing that you can define is a view. A view specifies a set
+of transformations on top of an existing table—basically just saved query plans, which can be
+convenient for organizing or reusing your query logic.
+Spark has several different notions of views. Views can be global, set to a database, or per session.
+
+---------------------------------------------
+Creating Views
+---------------------------------------------
+To an end user, views are displayed as tables, except rather than rewriting all of the data to a new
+location, they simply perform a transformation on the source data at query time.
+
+For instance, in the following example, we create a view in which
+the destination is United States in order to see only those flights:
+
+CREATE VIEW just_usa_view AS
+SELECT * FROM flights WHERE dest_country_name = 'United States'
+
+A view is effectively a transformation and Spark will perform it only at query time. This means
+that it will only apply that filter after you actually go to query the table (and not earlier).
+Effectively, views are equivalent to creating a new DataFrame from an existing DataFrame.
+
+In fact, you can see this by comparing the query plans generated by Spark DataFrames and Spark
+SQL. In DataFrames, we would write the following:
+val flights = spark.read.format("json").load("/data/flight-data/json/2015-summary.json")
+val just_usa_df = flights.where("dest_country_name = 'United States'")
+just_usa_df.selectExpr("*").explain
+In SQL, we would write (querying from our view) this:
+EXPLAIN SELECT * FROM just_usa_view
+Or, equivalently:
+EXPLAIN SELECT * FROM flights WHERE dest_country_name = 'United States'
+
+---------------------------------------------
+Dropping Views
+---------------------------------------------
+
+DROP VIEW IF EXISTS just_usa_view;
+
+=============================================
+Databases
+=============================================
+Databases are a tool for organizing tables. As mentioned earlier, if you do not define one, Spark
+will use the default database. Any SQL statements that you run from within Spark (including
+DataFrame commands) execute within the context of a database. This means that if you change
+the database, any user-defined tables will remain in the previous database and will need to be
+queried differently.
+
+WARNING
+This can be a source of confusion, especially if you’re sharing the same context or session for your
+coworkers, so be sure to set your databases appropriately.
+
+You can see all databases by using the following command:
+SHOW DATABASES
+
+---------------------------------------------
+Creating Databases
+---------------------------------------------
+
+CREATE DATABASE some_db
+
+---------------------------------------------
+Setting the Database
+---------------------------------------------
+USE some_db
+After you set this database, all queries will try to resolve table names to this database. Queries
+that were working just fine might now fail or yield different results because you are in a different
+database:
+SHOW tables
+SELECT * FROM flights -- fails with table/view not found
+However, you can query different databases by using the correct prefix:
+SELECT * FROM default.flights
+You can see what database you’re currently using by running the following command:
+SELECT current_database()
+You can, of course, switch back to the default database:
+USE default;
+
+---------------------------------------------
+Dropping Databases
+---------------------------------------------
+
+DROP DATABASE IF EXISTS some_db;
+
+=============================================
+Select Statements
+=============================================
+Queries in Spark support the following ANSI SQL requirements (here we list the layout of the
+SELECT expression):
+
+SELECT [ALL|DISTINCT] named_expression[, named_expression, ...]
+FROM relation[, relation, ...]
+[lateral_view[, lateral_view, ...]]
+[WHERE boolean_expression]
+[aggregation [HAVING boolean_expression]]
+[ORDER BY sort_expressions]
+[CLUSTER BY expressions]
+[DISTRIBUTE BY expressions]
+[SORT BY sort_expressions]
+[WINDOW named_window[, WINDOW named_window, ...]]
+[LIMIT num_rows]
+named_expression:
+: expression [AS alias]
+relation:
+| join_relation
+| (table_name|query|relation) [sample] [AS alias]
+: VALUES (expressions)[, (expressions), ...]
+[AS (column_name[, column_name, ...])]
+expressions:
+: expression[, expression, ...]
+sort_expressions:
+: expression [ASC|DESC][, expression [ASC|DESC], ...]
+
+=============================================
+Advanced Topics
+=============================================
+Now that we defined where data lives and how to organize it, let’s move on to querying it. A
+SQL query is a SQL statement requesting that some set of commands be run. SQL statements
+can define manipulations, definitions, or controls.
+
+---------------------------------------------
+Complex Types
+---------------------------------------------
+There are three core complex types in Spark SQL: structs, lists, and maps.
+
+1.Struts
+--------
+Structs are more akin to maps. They provide a way of creating or querying nested data in Spark.
+To create one, you simply need to wrap a set of columns (or expressions) in parentheses:
+
+CREATE VIEW IF NOT EXISTS nested_data AS
+SELECT (DEST_COUNTRY_NAME, ORIGIN_COUNTRY_NAME) as country, count FROM flights
+
+Now, you can query this data to see what it looks like:
+
+SELECT * FROM nested_data
+
+You can even query individual columns within a struct—all you need to do is use dot syntax:
+
+SELECT country.DEST_COUNTRY_NAME, count FROM nested_data
+
+SELECT country.*, count FROM nested_data
+
+2.Lists
+-------
+If you’re familiar with lists in programming languages, Spark SQL lists will feel familiar. There
+are several ways to create an array or list of values. You can use the collect_list function,
+which creates a list of values. You can also use the function collect_set, which creates an
+array without duplicate values. These are both aggregation functions and therefore can be
+specified only in aggregations:
+
+SELECT DEST_COUNTRY_NAME as new_name, collect_list(count) as flight_counts,
+collect_set(ORIGIN_COUNTRY_NAME) as origin_set
+FROM flights GROUP BY DEST_COUNTRY_NAME
+
+You can, however, also create an array manually within a column, as shown here:
+
+SELECT DEST_COUNTRY_NAME, ARRAY(1, 2, 3) FROM flights
+
+You can also query lists by position by using a Python-like array query syntax:
+
+SELECT DEST_COUNTRY_NAME as new_name, collect_list(count)[0]
+FROM flights GROUP BY DEST_COUNTRY_NAME
+
+---------------------------------------------
+Functions
+---------------------------------------------
+To see a list of functions in Spark SQL, you use the SHOW FUNCTIONS statement:
+
+SHOW FUNCTIONS
+
+SHOW SYSTEM FUNCTIONS
+
+SHOW USER FUNCTIONS
+
+SHOW FUNCTIONS "s*";
+
+SHOW FUNCTIONS LIKE "collect*";
+
+Even though listing functions is certainly useful, often you might want to know more about
+specific functions themselves. To do this, use the DESCRIBE keyword, which returns the
+documentation for a specific function.
+
+User-defined functions
+----------------------
+As we saw in Chapters 3 and 4, Spark gives you the ability to define your own functions and use
+them in a distributed manner. You can define functions, just as you did before, writing the
+function in the language of your choice and then registering it appropriately:
+def power3(number:Double):Double = number * number * number
+spark.udf.register("power3", power3(_:Double):Double)
+SELECT count, power3(count) FROM flights
+You can also register functions through the Hive CREATE TEMPORARY FUNCTION syntax.
+
+---------------------------------------------
+Subqueries
+---------------------------------------------
+In Spark, there are two fundamental
+subqueries. Correlated subqueries use some information from the outer scope of the query in
+order to supplement information in the subquery. Uncorrelated subqueries include no
+information from the outer scope. Each of these queries can return one (scalar subquery) or more
+values. Spark also includes support for predicate subqueries, which allow for filtering based on
+values.
+
+Uncorrelated predicate subqueries
+---------------------------------
+For example, let’s take a look at a predicate subquery. In this example, this is composed of two
+uncorrelated queries. The first query is just to get the top five country destinations based on the
+data we have:
+
+SELECT dest_country_name FROM flights
+GROUP BY dest_country_name ORDER BY sum(count) DESC LIMIT 5
+
+Now we place this subquery inside of the filter and check to see if our origin country exists inthat list:
+
+SELECT * FROM flights
+WHERE origin_country_name IN (SELECT dest_country_name FROM flights
+GROUP BY dest_country_name ORDER BY sum(count) DESC LIMIT 5)
+
+This query is uncorrelated because it does not include any information from the outer scope of
+the query. It’s a query that you can run on its own.
+
+Correlated predicate subqueries
+--------------------------------
+Correlated predicate subqueries allow you to use information from the outer scope in your inner
+query. For example, if you want to see whether you have a flight that will take you back from
+your destination country, you could do so by checking whether there is a flight that has the
+destination country as an origin and a flight that had the origin country as a destination:
+
+SELECT * FROM flights f1
+WHERE EXISTS (SELECT 1 FROM flights f2
+WHERE f1.dest_country_name = f2.origin_country_name)
+AND EXISTS (SELECT 1 FROM flights f2
+WHERE f2.dest_country_name = f1.origin_country_name)
+
+EXISTS just checks for some existence in the subquery and returns true if there is a value. You
+can flip this by placing the NOT operator in front of it. This would be equivalent to finding a flight
+to a destination from which you won’t be able to return!
+
+Uncorrelated scalar queries
+---------------------------
+Using uncorrelated scalar queries, you can bring in some supplemental information that you
+might not have previously. For example, if you wanted to include the maximum value as its own
+column from the entire counts dataset, you could do this:
+
+SELECT *, (SELECT max(count) FROM flights) AS maximum FROM flights
+
+=============================================
+Miscellaneous Features
+=============================================
+
+Configurations
+--------------
+There are several Spark SQL application configurations, which we list in Table 10-1. You can set
+these either at application initialization or over the course of application execution (like we have
+seen with shuffle partitions throughout this book)
+
+Setting Configuration Values in SQL
+-----------------------------------
+We talk about configurations in Chapter 15, but as a preview, it’s worth mentioning how to set
+configurations from SQL. Naturally, you can only set Spark SQL configurations that way, but
+here’s how you can set shuffle partitions:
+
+SET spark.sql.shuffle.partitions=20

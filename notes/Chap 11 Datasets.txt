@@ -1,0 +1,123 @@
+Chapter 11. Datasets
+---------------------------------------------
+Datasets are the foundational type of the Structured APIs.
+Datasets are a strictly Java Virtual Machine (JVM) language feature that work only with Scala and Java.
+
+In fact, if you use Scala or Java, all “DataFrames” are actually Datasets of type Row.
+To efficiently support domain-specific objects, a special concept called an “Encoder” is required.
+The encoder maps the domain-specific type T to Spark’s internal type system.
+
+Spark converts the Spark Row format to the object you specified (a case class or Java class).
+This conversion slows down your operations but can provide more flexibility.
+
+When to Use Datasets
+=============================================
+- When the operation(s) you would like to perform cannot be expressed using DataFrame manipulations
+- When you want or need type-safety, and you’re willing to accept the cost ofperformance to achieve it
+
+Creating Datasets
+=============================================
+Creating Datasets is somewhat of a manual operation, requiring you to know and define the
+schemas ahead of time.
+
+In Java: Encoders
+---------------------------------------------
+import org.apache.spark.sql.Encoders;
+public class Flight implements Serializable{
+String DEST_COUNTRY_NAME;
+String ORIGIN_COUNTRY_NAME;
+Long DEST_COUNTRY_NAME;
+}
+Dataset<Flight> flights = spark.read
+.parquet("/data/flight-data/parquet/2010-summary.parquet/")
+.as(Encoders.bean(Flight.class));
+
+In Scala: Case Classes
+---------------------------------------------
+To create Datasets in Scala, you define a Scala case class. A case class is a regular class
+that has the following characteristics:
+Immutable
+Decomposable through pattern matching
+Allows for comparison based on structure instead of reference
+Easy to use and manipulate
+
+case class Flight(DEST_COUNTRY_NAME: String,
+ORIGIN_COUNTRY_NAME: String, count: BigInt)
+
+val flightsDF = spark.read
+.parquet("/data/flight-data/parquet/2010-summary.parquet/")
+val flights = flightsDF.as[Flight]
+
+Actions
+=============================================
+actions like collect, take, and count apply to whether we are using Datasets or DataFrames:
+
+flights.show
+
+Transformations
+=============================================
+Transformations on Datasets are the same as those that we saw on DataFrames.
+
+Filtering
+----------------------------------------------
+def originIsDestination(flight_row: Flight): Boolean = {
+return flight_row.ORIGIN_COUNTRY_NAME == flight_row.DEST_COUNTRY_NAME
+}
+
+flights.filter(flight_row => originIsDestination(flight_row)).first()
+The result is:
+Flight = Flight(United States,United States,348113)
+
+TIP
+You’ll notice in the following example that we’re going to create a function to define this filter. This is
+an important difference from what we have done thus far in the book. By specifying a function, we are
+forcing Spark to evaluate this function on every row in our Dataset. This can be very resource
+intensive. For simple filters it is always preferred to write SQL expressions. This will greatly reduce
+the cost of filtering out the data while still allowing you to manipulate it as a Dataset later on:
+
+Mapping
+----------------------------------------------
+val destinations = flights.map(f => f.DEST_COUNTRY_NAME)
+
+Notice that we end up with a Dataset of type String. That is because Spark already knows the
+JVM type that this result should return and allows us to benefit from compile-time checking if,
+for some reason, it is invalid.
+
+Joins
+=============================================
+Joins, as we covered earlier, apply just the same as they did for DataFrames. However Datasets
+also provide a more sophisticated method, the joinWith method. joinWith is roughly equal to a
+co-group (in RDD terminology) and you basically end up with two nested Datasets inside of one.
+
+case class FlightMetadata(count: BigInt, randomData: BigInt)
+val flightsMeta = spark.range(500).map(x => (x, scala.util.Random.nextLong))
+.withColumnRenamed("_1", "count").withColumnRenamed("_2", "randomData")
+.as[FlightMetadata]
+val flights2 = flights
+.joinWith(flightsMeta, flights.col("count") === flightsMeta.col("count"))
+
+Of course, a “regular” join would work quite well, too, although you’ll notice in this case that we
+end up with a DataFrame (and thus lose our JVM type information).
+val flights2 = flights.join(flightsMeta, Seq("count"))
+
+We can always define another Dataset to gain this back. It’s also important to note that there are
+no problems joining a DataFrame and a Dataset—we end up with the same result:
+val flights2 = flights.join(flightsMeta.toDF(), Seq("count"))
+
+Grouping and Aggregations
+=============================================
+Grouping and aggregations follow the same fundamental standards that we saw in the previous
+aggregation chapter, so groupBy rollup and cube still apply, but these return DataFrames
+instead of Datasets (you lose type information):
+
+flights.groupBy("DEST_COUNTRY_NAME").count()
+
+If you want to keep type information around there are
+other groupings and aggregations that you can perform. An excellent example is the groupByKey
+method.
+
+flights.groupByKey(x => x.DEST_COUNTRY_NAME).count()
+
+it’s a trade-off because now we are introducing JVM types as
+well as functions that cannot be optimized by Spark.
+
