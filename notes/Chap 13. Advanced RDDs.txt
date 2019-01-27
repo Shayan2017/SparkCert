@@ -1,0 +1,93 @@
+Chapter 13. Advanced RDDs
+--------------------------------------------------
+the key topics we will cover:
+
+Aggregations and key–value RDDs
+Custom partitioning
+RDD joins
+
+==================================================
+Key-Value RDDs
+==================================================
+// in Scala
+words.map(word => (word.toLowerCase, 1))
+
+// in Scala
+val keyword = words.keyBy(word => word.toLowerCase.toSeq(0).toString)
+
+// in Scala
+keyword.mapValues(word => word.toUpperCase).collect()
+
+// in Scala
+keyword.flatMapValues(word => word.toUpperCase).collect()
+
+// in Scala
+keyword.keys.collect()
+keyword.values.collect()
+
+keyword.lookup("s")
+
+==================================================
+Aggregations
+==================================================
+You can perform aggregations on plain RDDs or on PairRDDs, depending on the method that
+you are using.
+
+countByKey
+----------
+// in Scala
+val timeout = 1000L //milliseconds
+val confidence = 0.95
+KVcharacters.countByKey()
+KVcharacters.countByKeyApprox(timeout, confidence)
+
+groupByKey
+----------
+// in Scala
+KVcharacters.groupByKey().map(row => (row._1, row._2.reduce(addFunc))).collect()
+
+If you have massive key skew,
+some partitions might be completely overloaded with a ton of values for a given key, and you
+will get OutOfMemoryErrors.
+
+There are use cases when groupByKey does make sense. If you have consistent value sizes for
+each key and know that they will fit in the memory of a given executor, you’re going to be just
+fine.
+
+reduceByKey
+-----------
+This implementation is much more stable because the reduce happens within each partition and
+doesn’t need to put everything in memory. Additionally, there is no incurred shuffle during this
+operation;
+
+KVcharacters.reduceByKey(addFunc).collect()
+
+==================================================
+Joins
+==================================================
+
+
+
+==================================================
+Key-Value RDDs
+==================================================
+
+
+
+==================================================
+Key-Value RDDs
+==================================================
+
+
+
+==================================================
+Key-Value RDDs
+==================================================
+
+
+
+==================================================
+Key-Value RDDs
+==================================================
+
+

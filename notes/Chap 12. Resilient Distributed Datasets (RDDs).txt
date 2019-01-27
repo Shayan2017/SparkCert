@@ -1,0 +1,271 @@
+Chapter 12. Resilient Distributed Datasets (RDDs)
+--------------------------------------------------
+There are two sets of low-level APIs: there is one for manipulating distributed data (RDDs), and
+another for distributing and manipulating distributed shared variables (broadcast variables and
+accumulators).
+
+--------------------------------------------------
+When to Use the Low-Level APIs?
+--------------------------------------------------
+You should generally use the lower-level APIs in three situations:
+You need some functionality that you cannot find in the higher-level APIs; for example,
+
+- If you need very tight control over physical data placement across the cluster.
+- You need to maintain some legacy codebase written using RDDs.
+- You need to do some custom shared variable manipulation.
+
+When you’re calling a DataFrame transformation, it actually just becomes a set of
+RDD transformations. This understanding can make your task easier as you begin debugging
+more and more complex workloads.
+
+--------------------------------------------------
+How to Use the Low-Level APIs?
+--------------------------------------------------
+A SparkContext is the entry point for low-level API functionality. You access it through the
+SparkSession, which is the tool you use to perform computation across a Spark cluster.
+
+==================================================
+About RDDs
+==================================================
+In short, an RDD represents an immutable, partitioned collection of records that can be operated
+on in parallel. Unlike DataFrames though, where each record is a structured row containing
+fields with a known schema, in RDDs the records are just Java, Scala, or Python objects of the
+programmer’s choosing.
+
+RDDs give you complete control because every record in an RDD is a just a Java or Python
+object. You can store anything you want in these objects, in any format you want. This gives you
+great power, but not without potential issues.
+
+--------------------------------------------------
+Types of RDDs
+--------------------------------------------------
+As a user, however, you will likely only be creating
+two types of RDDs: the “generic” RDD type or a key-value RDD that provides additional
+functions, such as aggregating by key.
+
+The RDD APIs are available in Python as well as Scala and Java. For Scala and Java, the
+performance is for the most part the same, the large costs incurred in manipulating the raw
+objects. Python, however, can lose a substantial amount of performance when using RDDs.
+Running Python RDDs equates to running Python user-defined functions (UDFs) row by row.
+
+==================================================
+Creating RDDs
+==================================================
+
+-----------------------------------------------------
+Interoperating Between DataFrames, Datasets, and RDDs
+-----------------------------------------------------
+One of the easiest ways to get RDDs is from an existing DataFrame or Dataset. Converting these
+to an RDD is simple: just use the rdd method on any of these data types. You’ll notice that if you
+do a conversion from a Dataset[T] to an RDD, you’ll get the appropriate native type T back
+(remember this applies only to Scala and Java):
+
+// in Scala: converts a Dataset[Long] to RDD[Long]
+spark.range(500).rdd
+
+-----------------------------------------------------
+From a Local Collection
+-----------------------------------------------------
+To create an RDD from a collection, you will need to use the parallelize method on a
+SparkContext (within a SparkSession). This turns a single node collection into a parallel
+collection. When creating this parallel collection, you can also explicitly state the number of
+partitions into which you would like to distribute this array. In this case, we are creating two
+partitions:
+
+// in Scala
+val myCollection = "Spark The Definitive Guide : Big Data Processing Made Simple"
+.split(" ")
+val words = spark.sparkContext.parallelize(myCollection, 2)
+
+// in Scala
+words.setName("myWords")
+words.name // myWords
+
+-----------------------------------------------------
+From Data Sources
+-----------------------------------------------------
+Although you can create RDDs from data sources or text files, it’s often preferable to use the
+Data Source APIs. RDDs do not have a notion of “Data Source APIs” like DataFrames do;
+
+spark.sparkContext.textFile("/some/path/withTextFiles")
+
+This creates an RDD for which each record in the RDD represents a line in that text file or files.
+Alternatively, you can read in data for which each text file should become a single record. The
+use case here would be where each file is a file that consists of a large JSON object or some
+document that you will operate on as an individual:
+
+spark.sparkContext.wholeTextFiles("/some/path/withTextFiles")
+
+In this RDD, the name of the file is the first object and the value of the text file is the second
+string object.
+
+==================================================
+Manipulating RDDs
+==================================================
+You manipulate RDDs in much the same way that you manipulate DataFrames. As mentioned,
+the core difference being that you manipulate raw Java or Scala objects instead of Spark types.
+
+==================================================
+Transformations
+==================================================
+
+distinct
+--------
+
+words.distinct().count()
+
+filter
+-------
+// in Scala
+words.filter(word => startsWithS(word)).collect()
+
+map
+---
+// in Scala
+val words2 = words.map(word => (word, word(0), word.startsWith("S")))
+
+flatMap
+-------
+// in Scala
+words.flatMap(word => word.toSeq).take(5)
+
+sort
+----
+For instance, the following example sorts by word length from longest to shortest:
+// in Scala
+words.sortBy(word => word.length() * -1).take(2)
+
+Random Splits
+-------------
+We can also randomly split an RDD into an Array of RDDs by using the randomSplit method,
+which accepts an Array of weights and a random seed:
+// in Scala
+val fiftyFiftySplit = words.randomSplit(Array[Double](0.5, 0.5))
+
+==================================================
+Actions
+==================================================
+Just as we do with DataFrames and Datasets, we specify actions to kick off our specified
+transformations. Actions either collect data to the driver or write to an external data source.
+
+reduce
+------
+// in Scala
+spark.sparkContext.parallelize(1 to 20).reduce(_ + _) // 210
+# in Python
+spark.sparkContext.parallelize(range(1, 21)).reduce(lambda x, y: x + y) # 210
+
+count
+-----
+words.count()
+
+val confidence = 0.95
+val timeoutMilliseconds = 400
+words.countApprox(timeoutMilliseconds, confidence)
+
+words.countApproxDistinct(0.05)
+
+words.countApproxDistinct(4, 10)
+
+countByValue
+------------
+This method counts the number of values in a given RDD. However, it does so by finally loading
+the result set into the memory of the driver. You should use this method only if the resulting map
+is expected to be small because the entire thing is loaded into the driver’s memory. Thus, this
+method makes sense only in a scenario in which either the total number of rows is low or the
+number of distinct items is low:
+
+words.countByValue()
+
+words.countByValueApprox(1000, 0.95)
+
+first
+-----
+words.first()
+
+max and min
+------------
+max and min return the maximum values and minimum values, respectively:
+spark.sparkContext.parallelize(1 to 20).max()
+spark.sparkContext.parallelize(1 to 20).min()
+
+take
+----
+There are many variations on this function, such as takeOrdered, takeSample, and top. You
+can use takeSample to specify a fixed-size random sample from your RDD. You can specify
+whether this should be done by using withReplacement, the number of values, as well as the
+random seed. top is effectively the opposite of takeOrdered in that it selects the top values
+according to the implicit ordering:
+
+words.take(5)
+words.takeOrdered(5)
+words.top(5)
+val withReplacement = true
+val numberToTake = 6
+val randomSeed = 100L
+words.takeSample(withReplacement, numberToTake, randomSeed)
+
+==================================================
+Saving Files
+==================================================
+Saving files means writing to plain-text files. With RDDs, you cannot actually “save” to a data
+source in the conventional sense.
+
+saveAsTextFile
+--------------
+words.saveAsTextFile("file:/tmp/bookTitle")
+
+To set a compression codec, we must import the proper codec from Hadoop. You can find these
+in the org.apache.hadoop.io.compress library:
+
+// in Scala
+import org.apache.hadoop.io.compress.BZip2Codec
+words.saveAsTextFile("file:/tmp/bookTitleCompressed", classOf[BZip2Codec])
+
+SequenceFiles
+-------------
+A sequenceFile is a flat file consisting of binary key–value pairs. It is
+extensively used in MapReduce as input/output formats.
+
+words.saveAsObjectFile("/tmp/my/sequenceFilePath")
+
+Hadoop Files
+------------
+There are a variety of different Hadoop file formats to which you can save. These allow you to
+specify classes, output formats, Hadoop configurations, and compression schemes.
+
+==================================================
+Caching
+==================================================
+The same principles apply for caching RDDs as for DataFrames and Datasets. You can either
+cache or persist an RDD. By default, cache and persist only handle data in memory.
+
+words.cache()
+
+We can specify a storage level as any of the storage levels in the singleton object:
+org.apache.spark.storage.StorageLevel, which are combinations of memory only; disk
+only; and separately, off heap.
+
+// in Scala
+words.getStorageLevel
+
+==================================================
+Checkpointing
+==================================================
+One feature not available in the DataFrame API is the concept of checkpointing. Checkpointing
+is the act of saving an RDD to disk so that future references to this RDD point to those
+intermediate partitions on disk rather than recomputing the RDD from its original source. This is
+similar to caching except that it’s not stored in memory, only disk.
+
+spark.sparkContext.setCheckpointDir("/some/path/for/checkpointing")
+words.checkpoint()
+
+Now, when we reference this RDD, it will derive from the checkpoint instead of the source data.
+This can be a helpful optimization.
+
+==================================================
+Pipe RDDs to System Commands
+==================================================
+
+mapPartitions
+-------------
