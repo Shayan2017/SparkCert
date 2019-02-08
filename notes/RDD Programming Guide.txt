@@ -1,0 +1,276 @@
+Website: https://spark.apache.org/docs/latest/rdd-programming-guide.html
+------------------------------------------------------------------------
+
+ RDDs are created by starting with a file in the Hadoop file system (or any other Hadoop-supported file system),
+ or an existing Scala collection in the driver program, and transforming it.
+
+ Users may also ask Spark to persist an RDD in memory, allowing it to be reused efficiently across parallel operations.
+ Finally, RDDs automatically recover from node failures.
+
+ Spark supports two types of shared variables: broadcast variables, which can be used to cache a value in memory on all nodes,
+ and accumulators, which are variables that are only “added” to, such as counters and sums.
+
+--------------------------------------------------
+ Initializing Spark
+--------------------------------------------------
+The first thing a Spark program must do is to create a SparkContext object, which tells Spark how to access a cluster.
+To create a SparkContext you first need to build a SparkConf object that contains information about your application.
+
+Only one SparkContext may be active per JVM. You must stop() the active SparkContext before creating a new one.
+
+    val conf = new SparkConf().setAppName(appName).setMaster(master)
+    new SparkContext(conf)
+
+==================================================
+ Resilient Distributed Datasets (RDDs)
+==================================================
+There are two ways to create RDDs: parallelizing an existing collection in your driver program,
+or referencing a dataset in an external storage system, such as a shared filesystem, HDFS, HBase,
+or any data source offering a Hadoop InputFormat.
+
+--------------------------------------------------
+1.Parallelized Collections
+--------------------------------------------------
+Parallelized collections are created by calling SparkContext’s parallelize method on an existing collection in your driver program
+
+val data = Array(1, 2, 3, 4, 5)
+val distData = sc.parallelize(data)
+
+Once created, the distributed dataset (distData) can be operated on in parallel.
+
+Spark will run one task for each partition of the cluster. Typically you want 2-4 partitions for each CPU in your cluster.
+Normally, Spark tries to set the number of partitions automatically based on your cluster.
+However, you can also set it manually by passing it as a second parameter to parallelize (e.g. sc.parallelize(data, 10)).
+
+--------------------------------------------------
+2.External Datasets
+--------------------------------------------------
+Spark can create distributed datasets from any storage source supported by Hadoop, including your local file system, HDFS, Cassandra, HBase, Amazon S3, etc.
+Spark supports text files, SequenceFiles, and any other Hadoop InputFormat.
+
+scala> val distFile = sc.textFile("data.txt")
+distFile: org.apache.spark.rdd.RDD[String] = data.txt MapPartitionsRDD[10] at textFile at <console>:26
+
+Some notes on reading files with Spark:
+---------------------------------------
+- If using a path on the local filesystem, the file must also be accessible at the same path on worker nodes.
+Either copy the file to all workers or use a network-mounted shared file system.
+
+- All of Spark’s file-based input methods, including textFile, support running on directories, compressed files, and wildcards as well.
+For example, you can use textFile("/my/directory"), textFile("/my/directory/*.txt"), and textFile("/my/directory/*.gz").
+
+- The textFile method also takes an optional second argument for controlling the number of partitions of the file.
+By default, Spark creates one partition for each block of the file (blocks being 128MB by default in HDFS),
+but you can also ask for a higher number of partitions by passing a larger value. Note that you cannot have fewer partitions than blocks.
+
+==================================================
+RDD Operations
+==================================================
+RDDs support two types of operations:
+transformations, which create a new dataset from an existing one, and
+actions, which return a value to the driver program after running a computation on the dataset.
+
+By default, each transformed RDD may be recomputed each time you run an action on it.
+However, you may also persist an RDD in memory using the persist (or cache) method,
+in which case Spark will keep the elements around on the cluster for much faster access the next time you query it.
+There is also support for persisting RDDs on disk, or replicated across multiple nodes.
+
+==================================================
+Understanding closures
+==================================================
+
+--------------------------------------------------
+Local vs. cluster modes
+--------------------------------------------------
+To execute jobs, Spark breaks up the processing of RDD operations into tasks, each of which is executed by an executor.
+Prior to execution, Spark computes the task’s closure. The closure is those variables and methods which must be visible for
+the executor to perform its computations on the RDD (in this case foreach()). This closure is serialized and sent to each executor.
+
+In general, closures - constructs like loops or locally defined methods, should not be used to mutate some global state.
+
+Use an Accumulator instead if some global aggregation is needed.
+
+--------------------------------------------------
+Printing elements of an RDD
+--------------------------------------------------
+rdd.foreach(println) or rdd.map(println). On a single machine, this will generate the expected output and print all the RDD’s elements.
+However, in cluster mode, the output to stdout being called by the executors is now writing to the executor’s stdout instead, not the one on the driver,
+so stdout on the driver won’t show these!
+
+To print all elements on the driver, one can use the collect() method to first bring the RDD to the driver node thus: rdd.collect().foreach(println).
+This can cause the driver to run out of memory, though, because collect() fetches the entire RDD to a single machine;
+if you only need to print a few elements of the RDD, a safer approach is to use the take(): rdd.take(100).foreach(println).
+
+==================================================
+Working with Key-Value Pairs
+==================================================
+While most Spark operations work on RDDs containing any type of objects, a few special operations are only available on RDDs of key-value pairs.
+The most common ones are distributed “shuffle” operations, such as grouping or aggregating the elements by a key.
+
+The key-value pair operations are available in the PairRDDFunctions class, which automatically wraps around an RDD of tuples.
+
+Note: when using custom objects as the key in key-value pair operations,
+you must be sure that a custom equals() method is accompanied with a matching hashCode() method.
+
+==================================================
+Transformations
+==================================================
+1.filter
+2.flatMap - return a Seq rather than a single item
+
+3.map
+4.mapPartitions(func)
+    Similar to map, but runs separately on each partition (block) of the RDD,
+    so func must be of type Iterator<T> => Iterator<U> when running on an RDD of type T.
+5.mapPartitionsWithIndex(func)
+    Similar to mapPartitions, but also provides func with an integer value representing the index of the partition,
+    so func must be of type (Int, Iterator<T>) => Iterator<U> when running on an RDD of type T.
+6.sample(withReplacement, fraction, seed)
+
+7.union(otherDataset)
+8.intersection(otherDataset)
+
+9.distinct([numPartitions]))
+
+10.groupByKey([numPartitions])
+11.reduceByKey(func, [numPartitions])
+12.sortByKey([ascending], [numPartitions])
+13.aggregateByKey(zeroValue)(seqOp, combOp, [numPartitions])
+    When called on a dataset of (K, V) pairs, returns a dataset of (K, U) pairs where the values for each key are
+    aggregated using the given combine functions and a neutral "zero" value.
+    Allows an aggregated value type that is different than the input value type, while avoiding unnecessary allocations.
+    Like in groupByKey, the number of reduce tasks is configurable through an optional second argument.
+
+14.join(otherDataset, [numPartitions])
+    When called on datasets of type (K, V) and (K, W), returns a dataset of (K, (V, W)) pairs with all pairs of elements for each key.
+    Outer joins are supported through leftOuterJoin, rightOuterJoin, and fullOuterJoin.
+
+15.cogroup(otherDataset, [numPartitions])
+    When called on datasets of type (K, V) and (K, W), returns a dataset of (K, (Iterable<V>, Iterable<W>)) tuples.
+    This operation is also called groupWith.
+
+16.cartesian(otherDataset)
+    When called on datasets of types T and U, returns a dataset of (T, U) pairs (all pairs of elements).
+
+17.pipe(command, [envVars])
+
+18.coalesce(numPartitions)
+    Decrease the number of partitions in the RDD to numPartitions. Useful for running operations more efficiently after filtering down a large dataset.
+
+19.repartition(numPartitions)
+    Reshuffle the data in the RDD randomly to create either more or fewer partitions and balance it across them.
+    This always shuffles all data over the network.
+
+20.repartitionAndSortWithinPartitions(partitioner)
+    Repartition the RDD according to the given partitioner and, within each resulting partition, sort records by their keys.
+    This is more efficient than calling repartition and then sorting within each partition because it can push the sorting down into the shuffle machinery.
+
+==================================================
+Actions
+==================================================
+
+1.first
+    similar to take(1)
+2.take(n)
+3.takeOrdered(n, [ordering])
+4.takeSample(withReplacement, num, [seed])
+
+5.count
+6.countByKey
+    Only available on RDDs of type (K, V). Returns a hashmap of (K, Int) pairs with the count of each key.
+7.reduce(func)
+
+8.collect
+9.foreach(func)
+
+10.saveAsTextFile(path)
+11.saveAsSequenceFile(path) (Java and Scala)
+12.saveAsObjectFile(path) (Java and Scala)
+
+==================================================
+Shuffle operations
+==================================================
+
+Operations which can cause a shuffle include :
+    repartition operations like repartition and coalesce,
+    ‘ByKey operations (except for counting) like groupByKey and reduceByKey, and
+    join operations like cogroup and join.
+
+The Shuffle is an expensive operation since it involves disk I/O, data serialization, and network I/O.
+To organize data for the shuffle, Spark generates sets of tasks - map tasks to organize the data,
+and a set of reduce tasks to aggregate it.
+
+Certain shuffle operations can consume significant amounts of heap memory since they employ in-memory data structures to
+organize records before or after transferring them. Specifically, reduceByKey and aggregateByKey create these structures
+on the map side, and 'ByKey operations generate these on the reduce side. When data does not fit in memory Spark will
+spill these tables to disk, incurring the additional overhead of disk I/O and increased garbage collection.
+
+Shuffle also generates a large number of intermediate files on disk. As of Spark 1.3, these files are preserved until
+the corresponding RDDs are no longer used and are garbage collected. This is done so the shuffle files don’t need to be
+re-created if the lineage is re-computed. Garbage collection may happen only after a long period of time, if the
+application retains references to these RDDs or if GC does not kick in frequently. This means that long-running Spark
+jobs may consume a large amount of disk space. The temporary storage directory is specified by the spark.local.dir
+configuration parameter when configuring the Spark context.
+
+Shuffle behavior can be tuned by adjusting a variety of configuration parameters.
+See the ‘Shuffle Behavior’ section within the Spark Configuration Guide.
+
+==================================================
+RDD Persistence
+==================================================
+
+You can mark an RDD to be persisted using the persist() or cache() methods on it.
+The first time it is computed in an action, it will be kept in memory on the nodes.
+Spark’s cache is fault-tolerant – if any partition of an RDD is lost,
+it will automatically be recomputed using the transformations that originally created it.
+
+1.MEMORY_ONLY
+Store RDD as deserialized Java objects in the JVM. If the RDD does not fit in memory,
+some partitions will not be cached and will be recomputed on the fly each time they're needed. This is the default level.
+
+2.MEMORY_AND_DISK
+Store RDD as deserialized Java objects in the JVM. If the RDD does not fit in memory,
+store the partitions that don't fit on disk, and read them from there when they're needed.
+
+3.MEMORY_ONLY_SER (Java and Scala)
+Store RDD as serialized Java objects (one byte array per partition). This is generally more space-efficient than
+deserialized objects, especially when using a fast serializer, but more CPU-intensive to read.
+
+4.MEMORY_AND_DISK_SER (Java and Scala)
+Similar to MEMORY_ONLY_SER, but spill partitions that don't fit in memory to disk instead of recomputing them on the fly each time they're needed.
+
+5.DISK_ONLY
+Store the RDD partitions only on disk.
+
+6-10 MEMORY_ONLY_2, MEMORY_AND_DISK_2, etc.
+Same as the levels above, but replicate each partition on two cluster nodes.
+
+11.OFF_HEAP (experimental)
+Similar to MEMORY_ONLY_SER, but store the data in off-heap memory. This requires off-heap memory to be enabled.
+
+Spark also automatically persists some intermediate data in shuffle operations (e.g. reduceByKey), even without users
+calling persist. This is done to avoid recomputing the entire input if a node fails during the shuffle.
+We still recommend users call persist on the resulting RDD if they plan to reuse it.
+
+Don’t spill to disk unless the functions that computed your datasets are expensive, or they filter a large amount
+of the data. Otherwise, recomputing a partition may be as fast as reading it from disk.
+
+Use the replicated storage levels if you want fast fault recovery (e.g. if using Spark to serve requests from a
+web application). All the storage levels provide full fault tolerance by recomputing lost data, but the replicated ones
+let you continue running tasks on the RDD without waiting to recompute a lost partition.
+
+Removing Data
+Spark automatically monitors cache usage on each node and drops out old data partitions in a least-recently-used (LRU)
+fashion. If you would like to manually remove an RDD instead of waiting for it to fall out of the cache,
+use the RDD.unpersist() method.
+
+==================================================
+Shared Variables
+==================================================
+
+--------------------------------------------------
+Broadcast Variables
+--------------------------------------------------
+Broadcast variables allow the programmer to keep a read-only variable cached on each machine rather than shipping a copy of it with tasks.
+Spark also attempts to distribute broadcast variables using efficient broadcast algorithms to reduce communication cost.
+
