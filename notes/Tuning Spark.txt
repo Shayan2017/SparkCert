@@ -1,0 +1,117 @@
+Tuning Spark : https://spark.apache.org/docs/latest/tuning.html
+===============================================================
+
+Because of the in-memory nature of most Spark computations,
+Spark programs can be bottlenecked by any resource in the cluster: CPU, network bandwidth, or memory.
+
+This guide will cover two main topics:
+data serialization, which is crucial for good network performance and can also reduce memory use,
+and memory tuning. We also sketch several smaller topics.
+
+===============================================================
+Data Serialization
+===============================================================
+
+Often, this will be the first thing you should tune to optimize a Spark application.
+
+- Java Serialization
+- Kyro Serialization
+
+Kryo is significantly faster and more compact than Java serialization (often as much as 10x),
+but does not support all Serializable types and requires you to register the classes you’ll use
+in the program in advance for best performance.
+
+    val conf = new SparkConf().setMaster(...).setAppName(...)
+    conf.registerKryoClasses(Array(classOf[MyClass1], classOf[MyClass2]))
+    val sc = new SparkContext(conf)
+
+You can switch to using Kryo by initializing your job with a SparkConf and calling
+
+    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer").
+
+Since Spark 2.0.0, we internally use Kryo serializer when shuffling RDDs with simple types,
+arrays of simple types, or string type.
+
+If your objects are large, you may also need to increase the spark.kryoserializer.buffer config.
+This value needs to be large enough to hold the largest object you will serialize.
+
+===============================================================
+Memory Tuning
+===============================================================
+
+There are three considerations in tuning memory usage:
+the amount of memory used by your objects (you may want your entire dataset to fit in memory),
+the cost of accessing those objects,
+and the overhead of garbage collection (if you have high turnover in terms of objects).
+
+By default, Java objects are fast to access,
+but can easily consume a factor of 2-5x more space than the “raw” data inside their fields.
+
+----------------------------------------------------------------
+Memory Management Overview
+----------------------------------------------------------------
+
+Memory usage in Spark largely falls under one of two categories: execution and storage.
+Execution memory refers to that used for computation in shuffles, joins, sorts and aggregations,
+while storage memory refers to that used for caching and propagating internal data across the cluster.
+
+Serialized RDD Storage
+
+Garbage Collection Tuning
+
+===============================================================
+Other Considerations
+===============================================================
+
+Level of Parallelism
+----------------------------------------------------------------
+You can pass the level of parallelism as a second argument (see the spark.PairRDDFunctions documentation),
+or set the config property spark.default.parallelism to change the default.
+
+In general, we recommend 2-3 tasks per CPU core in your cluster.
+
+----------------------------------------------------------------
+Memory Usage of Reduce Tasks
+----------------------------------------------------------------
+Spark’s shuffle operations (sortByKey, groupByKey, reduceByKey, join, etc) build a hash table within each task to
+perform the grouping, which can often be large. The simplest fix here is to increase the level of parallelism,
+so that each task’s input set is smaller. Spark can efficiently support tasks as short as 200 ms, because
+it reuses one executor JVM across many tasks and it has a low task launching cost, so you can safely increase
+the level of parallelism to more than the number of cores in your clusters.
+
+----------------------------------------------------------------
+Broadcasting Large Variables
+----------------------------------------------------------------
+
+If your tasks use any large object from the driver program inside of them (e.g. a static lookup table),
+consider turning it into a broadcast variable.
+
+Spark prints the serialized size of each task on the master, so you can look at that to decide whether
+your tasks are too large; in general tasks larger than about 20 KB are probably worth optimizing.
+
+----------------------------------------------------------------
+Data Locality
+----------------------------------------------------------------
+
+Data locality can have a major impact on the performance of Spark jobs.
+If data and the code that operates on it are together then computation tends to be fast.
+
+Typically it is faster to ship serialized code from place to place than a chunk of data because
+code size is much smaller than data.
+
+There are several levels of locality based on the data’s current location. In order from closest to farthest:
+
+1.PROCESS_LOCAL data is in the same JVM as the running code. This is the best locality possible
+
+2.NODE_LOCAL data is on the same node. Examples might be in HDFS on the same node, or in another
+executor on the same node. This is a little slower than PROCESS_LOCAL because the data has to travel between processes
+
+3.NO_PREF data is accessed equally quickly from anywhere and has no locality preference
+
+4.RACK_LOCAL data is on the same rack of servers. Data is on a different server on the same rack so needs to be sent over the network, typically through a single switch
+
+5.ANY data is elsewhere on the network and not in the same rack
+
+In situations where there is no unprocessed data on any idle executor, Spark switches to lower locality levels.
+What Spark typically does is wait a bit in the hopes that a busy CPU frees up. Once that timeout expires,
+it starts moving the data from far away to the free CPU.

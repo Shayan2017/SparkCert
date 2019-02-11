@@ -111,11 +111,19 @@ DataFrame.
 val df = spark.read.format("json")
 .load("/data/flight-data/json/2015-summary.json")
 df.createOrReplaceTempView("dfTable")
+
 or
+
 val myDF = Seq(("Hello", 2, 1L)).toDF("col1", "col2", "col3")
-or 
+
+or
+
 val myRows = Seq(Row("Hello", null, 1L))
 val myRDD = spark.sparkContext.parallelize(myRows)
+val myManualSchema = new StructType(Array(
+    new StructField("some", StringType, true),
+    new StructField("col", StringType, true),
+    new StructField("names", LongType, false)))
 val myDf = spark.createDataFrame(myRDD, myManualSchema)
 
 select and selectExpr
