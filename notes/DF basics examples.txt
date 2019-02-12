@@ -1,0 +1,191 @@
+1.Creating RDD
+---------------
+scala> val rdd1 = sc.parallelize(List("a", "an", "as", "the", "this"))
+rdd1: org.apache.spark.rdd.RDD[String] = ParallelCollectionRDD[183] at parallelize at <console>:32
+
+scala> val rdd2 = sc.parallelize(Seq("a", "b", "c", "d", "e"))
+strArr: org.apache.spark.rdd.RDD[String] = ParallelCollectionRDD[184] at parallelize at <console>:32
+
+2.Creating DataFrames
+----------------------
+
+val df = spark.read.format("json")
+.load("/data/flight-data/json/2015-summary.json")
+df.createOrReplaceTempView("dfTable")
+
+or
+
+val myDF = Seq(("Hello", 2, 1L)).toDF("col1", "col2", "col3")
+
+or
+
+val myRows = Seq(Row("Hello", null, 1L))
+val myRDD = spark.sparkContext.parallelize(myRows)
+val myManualSchema = new StructType(Array(
+    new StructField("some", StringType, true),
+    new StructField("col", StringType, true),
+    new StructField("names", LongType, false)))
+val myDf = spark.createDataFrame(myRDD, myManualSchema)
+
+3.Columns, select
+-----------------
+val df = spark.range(10).toDF("nums")
+
+df.col("nums")
+df.column("nums")
+$"nums"
+'nums
+
+Ex:
+df.select(
+    df.col("DEST_COUNTRY_NAME"),
+    col("DEST_COUNTRY_NAME"),
+    column("DEST_COUNTRY_NAME"),
+    'DEST_COUNTRY_NAME,
+    $"DEST_COUNTRY_NAME",
+    expr("DEST_COUNTRY_NAME"))
+.show(2)
+
+4. selectExpr
+-------------
+
+// in Scala
+df.select("DEST_COUNTRY_NAME", "ORIGIN_COUNTRY_NAME").show(2)
+
+COMPILATION FAILURE =>
+df.select(col("DEST_COUNTRY_NAME"), "DEST_COUNTRY_NAME")
+
+df.select(expr("DEST_COUNTRY_NAME AS destination")).show(2)
+
+// in Scala
+df.selectExpr("DEST_COUNTRY_NAME as newColumnName", "DEST_COUNTRY_NAME").show(2)
+
+// in Scala
+df.selectExpr(
+    "*", // include all original columns
+    "(DEST_COUNTRY_NAME = ORIGIN_COUNTRY_NAME) as withinCountry")
+.show(2)
+
+5.Literals
+-----------
+
+// in Scala
+import org.apache.spark.sql.functions.lit
+df.select(expr("*"), lit(1).as("One")).show(2)
+
+6.Adding Columns
+-----------------
+
+// in Scala
+df.withColumn("numberOne", lit(1)).show(2)
+
+// in Scala
+df.withColumn("withinCountry", expr("ORIGIN_COUNTRY_NAME == DEST_COUNTRY_NAME"))
+.show(2)
+
+7.Renaming Columns
+-------------------
+
+// in Scala
+df.withColumnRenamed("DEST_COUNTRY_NAME", "dest").columns
+
+8.Removing Columns
+-------------------
+
+df.drop("ORIGIN_COUNTRY_NAME").columns
+
+9.Filtering Rows
+----------------
+
+df.filter(col("count") < 2).show(2)
+df.where("count < 2").show(2)
+
+// in Scala
+df.where(col("count") < 2).where(col("ORIGIN_COUNTRY_NAME") =!= "Croatia")
+.show(2)
+
+10.Getting Unique Rows
+----------------------
+
+// in Scala
+df.select("ORIGIN_COUNTRY_NAME", "DEST_COUNTRY_NAME").distinct().count()
+# in Python
+df.select("ORIGIN_COUNTRY_NAME", "DEST_COUNTRY_NAME").distinct().count()
+-- in SQL
+SELECT COUNT(DISTINCT(ORIGIN_COUNTRY_NAME, DEST_COUNTRY_NAME)) FROM dfTable
+
+11.Sorting Rows
+---------------
+
+// in Scala
+df.sort("count").show(5)
+df.orderBy("count", "DEST_COUNTRY_NAME").show(5)
+df.orderBy(col("count"), col("DEST_COUNTRY_NAME")).show(5)
+
+// in Scala
+import org.apache.spark.sql.functions.{desc, asc}
+df.orderBy(expr("count desc")).show(2)
+df.orderBy(desc("count"), asc("DEST_COUNTRY_NAME")).show(2)
+
+An advanced tip is to use asc_nulls_first, desc_nulls_first, asc_nulls_last, or
+desc_nulls_last to specify where you would like your null values to appear in an ordered
+DataFrame.
+
+For optimization purposes, it’s sometimes advisable to sort within each partition before another
+set of transformations. You can use the sortWithinPartitions method to do this:
+
+// in Scala
+spark.read.format("json").load("/data/flight-data/json/*-summary.json")
+.sortWithinPartitions("count")
+
+12.Limit
+--------
+// in Scala
+df.limit(5).show()
+
+-- in SQL
+SELECT * FROM dfTable LIMIT 6
+
+// in Scala
+df.orderBy(expr("count desc")).limit(6).show()
+
+13.Repartition and Coalesce
+---------------------------
+Repartition will incur a full shuffle of the data, regardless of whether one is necessary. This
+means that you should typically only repartition when the future number of partitions is greater
+than your current number of partitions or when you are looking to partition by a set of columns:
+
+// in Scala
+df.rdd.getNumPartitions // 1
+
+// in Scala
+df.repartition(5)
+
+If you know that you’re going to be filtering by a certain column often, it can be worth
+repartitioning based on that column:
+
+// in Scala
+df.repartition(col("DEST_COUNTRY_NAME"))
+
+// in Scala
+df.repartition(5, col("DEST_COUNTRY_NAME"))
+
+Coalesce, on the other hand, will not incur a full shuffle and will try to combine partitions. This
+operation will shuffle your data into five partitions based on the destination country name, and
+then coalesce them (without a full shuffle):
+
+// in Scala
+df.repartition(5, col("DEST_COUNTRY_NAME")).coalesce(2)
+
+14.Collecting Rows to the Driver
+--------------------------------
+collect gets all data from the entire DataFrame,
+take selects the first N rows, and
+show prints out a number of rows nicely.
+
+There’s an additional way of collecting rows to the driver in order to iterate over the entire
+dataset. The method toLocalIterator collects partitions to the driver as an iterator. This
+method allows you to iterate over the entire dataset partition-by-partition in a serial manner:
+
+collectDF.toLocalIterator()
+
